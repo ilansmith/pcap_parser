@@ -1,50 +1,80 @@
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
+#include <time.h>
+#include "pcap.h"
 
-int pcap_init(char *pcap);
-void pcap_uninit(void);
+enum time_presentation {
+	SHOW_TIME,
+	SHOW_TIME_EPOCH,
+};
 
-static void test_pcap_init(void)
+static void show_time(time_t ts_sec, uint32_t ts_usec)
 {
-	pcap_init("./capture.pcap");
+	char timestamp[100];
+	struct tm *tm;
+	int tmp;
+
+	tm = localtime((time_t*)(&ts_sec));
+	strftime(timestamp, sizeof(timestamp), "%b %e, %Y %H:%M:%S", tm);
+	tmp = strlen(timestamp);
+	snprintf(timestamp + tmp, sizeof(timestamp) - tmp, ".%u", ts_usec);
+
+	printf("%s  ", timestamp);
 }
 
-static void test_pcap_uninit(void)
+static void show_time_epoch(time_t ts_sec, uint32_t ts_usec)
 {
-	pcap_uninit();
+	printf("%u.%u  ", (uint32_t)ts_sec, ts_usec);
 }
 
-uint8_t read8(uint8_t var);
-uint16_t read16(uint16_t var);
-uint32_t read32(uint32_t var);
-uint64_t read64(uint64_t var);
-
-static void test_read(void)
+static int do_next(enum time_presentation show)
 {
-	printf("read8(0xa3): 0x%x\n", read8(0xa3));
-	printf("read16(0x2f1d): 0x%x\n", read16(0x2f1d));
-	printf("read32(0xe529bd19): 0x%x\n", read32(0xe529bd19));
-	printf("read64(0x6d9ea273b5f4c181): 0x%lx\n",
-		read64(0x6d9ea273b5f4c181));
-}
+	struct pcap buf;
+	int ret;
+	int i;
+	void (*time_show)(time_t ts_sec, uint32_t ts_usec);
 
-int pcap_next(void);
+	ret = pcap_next(&buf);
+	if (ret < 1) {
+		if (!ret)
+			printf("end of pcap\n");
+		else
+			printf("error reading pcap\n");
 
-static void test_pcap_next(void)
-{
-	pcap_next();
-	pcap_next();
-	pcap_next();
-	pcap_next();
+		return -1;
+	}
+
+	switch (show)
+	{
+	case SHOW_TIME:
+		time_show = show_time;
+		break;
+	case SHOW_TIME_EPOCH:
+		time_show = show_time_epoch;
+		break;
+	default:
+		return -1;
+	}
+
+	time_show((time_t)read32(buf.hdr.ts_sec), read32(buf.hdr.ts_usec));
+	for (i = 0; i < 14; i ++)
+		printf(" %.2x", buf.data[i]);
+	printf("\n");
+	return 0;
 }
 
 int main(int argc, char **argv)
 {
-	test_pcap_init();
-	test_read();
-	test_pcap_next();
-	test_pcap_uninit();
+	int i;
+	int ret;
 
-	return 0;
+	ret = pcap_init("./capture.pcap");
+
+	for (i = 0; !ret && i < 4; i++)
+		ret = do_next(SHOW_TIME);
+
+	pcap_uninit();
+	return ret;
 }
 
